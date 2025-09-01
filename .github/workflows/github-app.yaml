@@ -1,0 +1,34 @@
+name: Commit Changes via GitHub App
+
+on:
+  workflow_dispatch:
+
+jobs:
+  commit_changes:
+    runs-on: ubuntu-latest
+    steps:
+    
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Configure git
+        run: |
+          git config user.name "ci-bot[app]"
+          git config user.email "ci-bot[app]@users.noreply.github.com"
+
+      - name: Make changes
+        run: |
+          echo "Automated update $(date)" >> changes.txt
+
+      - name: Commit and push
+        env:
+          TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          git add .
+          git commit -m "Automated changes"
+          git push origin HEAD:${GITHUB_REF#refs/heads/} \
+            --force-with-lease "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"

@@ -1,0 +1,175 @@
+# .github/workflows/promote-to-prod.yaml
+name: Promote to Production GAR (Prod)
+env:
+  STG_PROJECT_ID: ${{ secrets.STG_PROJECT_ID }}
+  PROD_PROJECT_ID: ${{ secrets.PROD_PROJECT_ID }}
+# on:
+#   workflow_dispatch:
+#     inputs:
+#       approve:
+#         description: 'Approved by'
+#         required: true
+#         type: choice
+#         options: ['pravin135']
+
+on:
+  workflow_dispatch:  # Allows manual trigger from GitHub UI/API
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: 
+      name: production
+      url: https://your-deployment-url.com  # Optional: Link to your app
+    permissions:
+      id-token: write # Required for Workload Identity Federation (GCP)
+      contents: write # Required to commit changes to the repo
+      # --- Verify permissions (optional, extra safety) ---
+
+# on:
+#   workflow_dispatch:
+#     # Optional inputs for manual promotion, e.g., to override the default image tag
+#     inputs:
+#       image_tag:
+#         description: 'Optional: Specific image tag to promote (e.g., commit SHA or release version)'
+#         required: false
+# jobs:
+#   promote:
+#     runs-on: ubuntu-latest
+#     environment: 
+#       name: production     # 👈 This links to the protected environment
+#       url: https://github.com
+#     permissions:
+#       id-token: write # Required for Workload Identity Federation (GCP)
+#       contents: write # Required to commit changes to the repo
+    
+    steps:
+      - name: Validate approver
+        run: |
+          echo "✅ Approved by: ${{ github.actor }}"
+          echo "This job can ONLY run after approval in the 'production' environment."
+      - name: Checkout stage branch (to get current stage image)
+        uses: actions/checkout@v4
+        with:
+          ref: stage
+          fetch-depth: 0 # Needed to read the manifests/stage/deployment.yaml
+
+      - name: Install yq
+        run: |
+           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+           sudo chmod a+x /usr/local/bin/yq
+      - name: Debug - Show deployment.yaml content
+        run: cat manifests/stage/deployment.yaml
+      - name: Extract image details
+        run: |
+          # Extract only the first document (index 0)
+          FULL_STAGE_IMAGE=$(yq -r '.spec.template.spec.containers[0].image | select(. != null)' manifests/stage/deployment.yaml)
+          echo "Full stage image: $FULL_STAGE_IMAGE"
+          STAGE_REPO=$(echo "$FULL_STAGE_IMAGE" | cut -d':' -f1)
+          STAGE_TAG=$(echo "$FULL_STAGE_IMAGE" | cut -d':' -f2)
+          PROD_REPO=$(echo "$STAGE_REPO" | \
+                      sed 's|praveen-345|shared-vpc-service-315|' | \
+                      sed 's|python-app/python-app|prod-python-app/prod-app|')
+          PROD_TAG="${{ inputs.image_tag }}"
+          PROD_TAG="${PROD_TAG:-$STAGE_TAG}"
+          NEW_PROD_IMAGE="${PROD_REPO}:${PROD_TAG}"
+          echo "STAGE_REPO=$STAGE_REPO" >> $GITHUB_ENV
+          echo "STAGE_TAG=$STAGE_TAG" >> $GITHUB_ENV
+          echo "PROD_REPO=$PROD_REPO" >> $GITHUB_ENV
+          echo "PROD_TAG=$PROD_TAG" >> $GITHUB_ENV
+          echo "NEW_PROD_IMAGE=$NEW_PROD_IMAGE" >> $GITHUB_ENV
+        
+      - name: Authenticate to GCP using Workload Identity Federation
+        id: auth-stage
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/915484313024/locations/global/workloadIdentityPools/my-pool/providers/my-provider 
+          service_account: gke-workload@praveen-345.iam.gserviceaccount.com
+      - name: Configure gcloud
+        run: |
+          gcloud config set project $STG_PROJECT_ID
+          gcloud auth configure-docker asia-south1-docker.pkg.dev
+
+      - name: Pull image from staging GAR
+        run: docker pull ${{ env.STAGE_REPO }}:${{ env.STAGE_TAG }}
+
+      - name: Tag image for production GAR
+        run: docker tag ${{ env.STAGE_REPO }}:${{ env.STAGE_TAG }} ${{ env.NEW_PROD_IMAGE }}
+
+      - name: Authenticate to GCP using Workload Identity Federation
+        id: auth-prod
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/701983950006/locations/global/workloadIdentityPools/gh-prod-pool/providers/gh-prod-provider 
+          service_account: github-actions-sa@shared-vpc-service-315.iam.gserviceaccount.com
+      - name: Configure gcloud
+        run: |
+          gcloud config set project $PROD_PROJECT_ID
+          gcloud auth configure-docker asia-south1-docker.pkg.dev
+
+      - name: Push image to production GAR
+        run: docker push ${{ env.NEW_PROD_IMAGE }}
+
+      - name: Checkout main branch (for updating prod manifest)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-branch
+
+      # - name: Update prod deployment with new production image
+      #   run: |
+      #     # Use yq for safer updates
+      #     cd main-branch
+      #     yq e '.spec.template.spec.containers[0].image = "${{ env.NEW_PROD_IMAGE }}"' -i manifests/prod/deployment.yaml
+      
+      - name: Check yq version
+        run: yq --version
+
+      - name: Create yq expression
+        run: |
+          echo '
+          if .kind == "Deployment" and .metadata.name == "test-app" then
+            .spec.template.spec.containers[0].image = strenv(NEW_PROD_IMAGE)
+          else
+            .
+          end
+          ' > update_image_expr.yml
+
+      - name: Update image using yq file
+        run: |
+          cd main-branch
+          yq -i "$(cat ../../update_image_expr.yml)" manifests/prod/deployment.yaml
+
+      # - name: Update prod deployment with new production image
+      #   run: |
+      #     cd main-branch
+      #     #yq -i 'select(.kind == "Deployment") .spec.template.spec.containers[0].image = "${{ env.NEW_PROD_IMAGE }}"' manifests/prod/deployment.yaml
+      #     #yq -i "if .kind == \"Deployment\" and .metadata.name == \"test-app\" then .spec.template.spec.containers[0].image = strenv(NEW_PROD_IMAGE) else . end" manifests/prod/deployment.yaml
+      #     yq -i 'if .kind == "Deployment" and .metadata.name == "test-app" then .spec.template.spec.containers[0].image = strenv(NEW_PROD_IMAGE) else . end' manifests/prod/deployment.yaml
+
+      - name: Commit and push to main
+        run: |
+          cd main-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifests/prod/deployment.yaml
+          git commit -m "Promote image to prod: ${{ env.NEW_PROD_IMAGE }} [ci skip]" || echo "No changes to commit"
+          git push origin main
+
+
+      - name: Send Slack success message
+        if: success()
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data "{
+            \"text\": \":white_check_mark: *Production Deploy Succeeded!*\n> Image: ${{ env.NEW_PROD_IMAGE }}\n> Workflow: $GITHUB_WORKFLOW\n> By: $GITHUB_ACTOR\n> <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>\"
+          }" ${{ secrets.SLACK_WEBHOOK_URL }}
+        env:
+          STAGE_IMAGE: ${{ env.STAGE_IMAGE }}
+
+      - name: Send Slack failure message
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data "{
+            \"text\": \":x: *Production Deploy Failed!*\n> Workflow: $GITHUB_WORKFLOW\n> By: $GITHUB_ACTOR\n> <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>\"
+          }" ${{ secrets.SLACK_WEBHOOK_URL }}
+
