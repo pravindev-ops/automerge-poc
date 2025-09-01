@@ -5,7 +5,7 @@ RUN apt-get update && \
     apt-get install -y default-libmysqlclient-dev gcc && \
     rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# Set working directory for the code
 WORKDIR /code
 
 # Copy requirements and install dependencies
