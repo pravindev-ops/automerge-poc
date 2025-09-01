@@ -1,0 +1,192 @@
+# name: Stage Deploy/Merging stage to main 
+
+# on:
+#   workflow_dispatch:
+
+# env:
+#   PROJECT_ID: gke-arena
+#   PROJECT_NUMBER: 1075858964756
+#   REGION: asia-south1
+#   REPOSITORY: preveen-repo
+#   REPOSITORY_REGION: asia-south1
+#   REPO_URL: asia-south1-docker.pkg.dev
+#   IMAGE_NAME: python-app
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
+#     permissions:
+#       id-token: write
+#       contents: write
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v4
+#         with:
+#           persist-credentials: false 
+#       - name: Authenticate to GCP using Workload Identity Federation
+#         id: auth-stage
+#         uses: google-github-actions/auth@v2
+#         with:
+#           workload_identity_provider: projects/1075858964756/locations/global/workloadIdentityPools/github-pool/providers/github-provider 
+#           service_account: githubactions-sa@gke-arena.iam.gserviceaccount.com
+#       - name: Configure gcloud
+#         run: |
+#           gcloud config set project $PROJECT_ID
+#           gcloud auth configure-docker asia-south1-docker.pkg.dev
+
+#       - name: Build and push Docker image
+#         run: |
+#           SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+#           TIMESTAMP=$(date +%Y%m%d%H%M%S)
+#           IMAGE_TAG="v1-${SHORT_SHA}-${TIMESTAMP}"
+#           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+#           # docker build -t $REPO_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$IMAGE_TAG .
+#           # docker push $REPO_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$IMAGE_TAG
+          
+#       - name: Update stage manifest
+#         run: |
+#           FULL_IMAGE="$REPO_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:${{ env.IMAGE_TAG }}"
+#           echo "Using image: $FULL_IMAGE"
+#           sed -i "s|\( *image:\).*|\1 $FULL_IMAGE|" manifests/stage/deployment.yaml
+#           cat manifests/stage/deployment.yaml 
+          
+
+
+#       # 2. Generate GitHub App token
+#       - name: Generate app token
+#         id: app-token
+#         uses: tibdex/github-app-token@v2
+#         with:
+#           app_id: ${{ secrets.APP_ID }}
+#           private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          
+#       # - name: Generate GitHub App token
+#       #   id: generate-token
+#       #   uses: actions/create-github-app-token@v2
+#       #   with:
+#       #     app-id: ${{ secrets.APP_ID }}
+#       #     private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+          
+#       - name: Configure git
+#         run: |
+#           git config user.name "ci-bot[app]"
+#           git config user.email "ci-bot[app]@users.noreply.github.com"
+
+#       # - name: Check App identity
+#       #   run: |
+#       #    gh api /app --jq '.slug'
+#       #    gh api /installation/repositories --jq '.repositories[].full_name'
+#       #   env:
+#       #     GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+
+
+
+
+#       # - name: Make changes
+#       #   run: |
+#       #     echo "Automated update $(date)" >> changes.txt
+          
+#       - name: Commit and push
+#         # env:
+#         #   TOKEN: ${{ steps.generate-token.outputs.token }}
+#         run: |
+#           git add manifests/stage/deployment.yaml
+#           git commit -m "Update image to $IMAGE_TAG [ci skip]" || echo "No changes to commit"
+#           git push https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/pravindev-ops/python-app-ci.git HEAD:${GITHUB_REF#refs/heads/}
+
+
+
+name: Stage Deploy/Merging stage to main 
+
+on:
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: gke-arena
+  PROJECT_NUMBER: 1075858964756
+  REGION: asia-south1
+  REPOSITORY: preveen-repo
+  REPOSITORY_REGION: asia-south1
+  REPO_URL: asia-south1-docker.pkg.dev
+  IMAGE_NAME: python-app
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false 
+
+      - name: Authenticate to GCP using Workload Identity Federation
+        id: auth-stage
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/1075858964756/locations/global/workloadIdentityPools/github-pool/providers/github-provider 
+          service_account: githubactions-sa@gke-arena.iam.gserviceaccount.com
+
+      - name: Configure gcloud
+        run: |
+          gcloud config set project $PROJECT_ID
+          gcloud auth configure-docker $REPO_URL
+
+      - name: Build and push Docker image
+        run: |
+          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          IMAGE_TAG="v1-${SHORT_SHA}-${TIMESTAMP}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          # docker build -t $REPO_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$IMAGE_TAG .
+          # docker push $REPO_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$IMAGE_TAG
+          
+      - name: Update stage manifest
+        run: |
+          FULL_IMAGE="$REPO_URL/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:${{ env.IMAGE_TAG }}"
+          echo "Using image: $FULL_IMAGE"
+          sed -i "s|\( *image:\).*|\1 $FULL_IMAGE|" manifests/stage/deployment.yaml
+          cat manifests/stage/deployment.yaml 
+
+      - name: Generate app token
+        id: app-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Configure git
+        run: |
+          git config user.name "ci-bot[app]"
+          git config user.email "ci-bot[app]@users.noreply.github.com"
+
+      - name: Commit and push stage manifest
+        run: |
+          git add manifests/stage/deployment.yaml
+          git commit -m "Update image to $IMAGE_TAG [skip ci]" || echo "No changes to commit"
+          git push https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/pravindev-ops/automerge-poc.git HEAD:${GITHUB_REF#refs/heads/}
+
+  promote-to-main:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout stage branch
+        uses: actions/checkout@v4
+        with:
+          ref: stage
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "ci-bot[app]"
+          git config user.email "ci-bot[app]@users.noreply.github.com"
+
+      - name: Merge stage into main
+        run: |
+          git checkout main
+          git merge stage --no-ff -m "Auto-merge stage into main [skip ci]"
+          git push https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/pravindev-ops/automerge-poc.git main
+
+
