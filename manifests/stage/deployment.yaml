@@ -19,7 +19,7 @@ spec:
       serviceAccountName: demo-app-sa  # Must have access to Secret Manager
       containers:
         - name: demo-app
-          image: asia-south1-docker.pkg.dev/gke-arena/preveen-repo/python-app:v1-8db2448-20250901120142
+          image: asia-south1-docker.pkg.dev/gke-arena/preveen-repo/python-app:v1-f402269-20250902055545
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
