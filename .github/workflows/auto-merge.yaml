@@ -177,6 +177,7 @@ jobs:
         with:
           ref: stage
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Generate app token
         id: app-token
