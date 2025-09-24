@@ -38,7 +38,7 @@ def db_init():
 
 @app.route('/')
 def greet():
-    return 'Valar Morghulis!!!'
+    return 'Valar Morghulis!!!!'
 
 @app.route("/storedata", methods=["POST"])
 def store_data():
